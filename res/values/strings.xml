@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <string name="hello">Hello World, Noob3DActivity!</string>
+    <string name="app_name">Noob3D</string>
+    <string name="notSupported">Your device does not support OpenGLES2, closing application</string>
+
+</resources>
