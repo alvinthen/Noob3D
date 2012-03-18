@@ -7,7 +7,9 @@ import java.nio.FloatBuffer;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
+import android.opengl.GLES20;
 import android.opengl.GLSurfaceView.Renderer;
+import android.opengl.Matrix;
 
 public class CustomRenderer implements Renderer {
 
@@ -86,7 +88,25 @@ public class CustomRenderer implements Renderer {
 
 	public void onSurfaceCreated(GL10 arg0, EGLConfig arg1) {
 		// TODO Auto-generated method stub
+		GLES20.glClearColor(0.5f, 0.5f, 0.5f, 0.5f);
+		
+		// Set eye behind origin
+		final float eyeX = 0;
+		final float eyeY = 0;
+		final float eyeZ = 1.5f;
 
+		// Look towards distance
+		final float lookX = 0;
+		final float lookY = 0;
+		final float lookZ = -5.0f;
+		
+		// Up vector where the head pointing at
+		final float upX = 0;
+		final float upY = 1.0f;
+		final float upZ = 0;
+		
+		// Set the view matrix, representing camera position
+		Matrix.setLookAtM(mViewMatrix, 0, eyeX, eyeY, eyeZ, lookX, lookY, lookZ, upX, upY, upZ);
 	}
 
 }
