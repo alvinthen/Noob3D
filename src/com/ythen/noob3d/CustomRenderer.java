@@ -7,12 +7,11 @@ import java.nio.FloatBuffer;
 import javax.microedition.khronos.egl.EGLConfig;
 import javax.microedition.khronos.opengles.GL10;
 
-import android.app.Activity;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView.Renderer;
 import android.opengl.Matrix;
+import android.os.SystemClock;
 import android.util.Log;
-import android.widget.Toast;
 
 public class CustomRenderer implements Renderer {
 
@@ -24,8 +23,16 @@ public class CustomRenderer implements Renderer {
 	private int mMVPMatrixHandle;
 	private int mPositionHandle;
 	private int mColorHandle;
-	
+
 	private int mBytesPerFloat = 4;
+
+	// Number of bytes per vertex (7 elements per vertex)
+	private final int mStrideBytes = 7 * mBytesPerFloat;
+
+	private final int mPositionOffset = 0;
+	private final int mPositionDataSize = 3;
+	private final int mColorOffset = 3;
+	private final int mColorDataSize = 4;
 
 	private final FloatBuffer mTriangle1Vertices;
 	private final FloatBuffer mTriangle2Vertices;
@@ -85,12 +92,45 @@ public class CustomRenderer implements Renderer {
 
 	public void onDrawFrame(GL10 arg0) {
 		// TODO Auto-generated method stub
+		GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT | GLES20.GL_COLOR_BUFFER_BIT);
 
+		// Do a complete rotation every 10 seconds
+		long time = SystemClock.uptimeMillis() % 10000L;
+		float angleInDegrees = (360.0f / 10000.0f) * (int) time;
+		Matrix.setIdentityM(mModelMatrix, 0);
+		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 0, 0, 1.0f);
+		drawTriangle(mTriangle1Vertices);
+		
+		Matrix.setIdentityM(mModelMatrix, 0);
+		Matrix.translateM(mModelMatrix, 0, 0, -1.0f, 0);
+		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 0, 1, 0);
+		drawTriangle(mTriangle2Vertices);
+		
+		Matrix.setIdentityM(mModelMatrix, 0);
+		Matrix.translateM(mModelMatrix, 0, 0, 1.0f, 0);
+		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 1, 0, 0);
+		drawTriangle(mTriangle3Vertices);
 	}
 
-	public void onSurfaceChanged(GL10 arg0, int arg1, int arg2) {
+	public void onSurfaceChanged(GL10 arg0, int width, int height) {
 		// TODO Auto-generated method stub
+		// Sets the viewport size to be same as our surface
+		GLES20.glViewport(0, 0, width, height);
 
+		// Create a new perspective projection matrix where the height would
+		// remain same while the width varies with the aspect ratio of the
+		// surface
+		// Note to ythen: This should be to handle changes on screen orientation
+		final float ratio = (float) width / height;
+		final float left = -ratio;
+		final float right = ratio;
+		final float bottom = -1.0f;
+		final float top = 1.0f;
+		final float near = 1.0f;
+		final float far = 10.0f;
+
+		Matrix.frustumM(mProjectionMatrix, 0, left, right, bottom, top, near,
+				far);
 	}
 
 	public void onSurfaceCreated(GL10 arg0, EGLConfig arg1) {
@@ -117,10 +157,10 @@ public class CustomRenderer implements Renderer {
 				lookZ, upX, upY, upZ);
 
 		final String vertexShader = "uniform mat4 u_MVPMatrix;	\n"
-				+ "attribute vec4 a_position;	\n"
+				+ "attribute vec4 a_Position;	\n"
 				+ "attribute vec4 a_Color;	\n" + "varying vec4 v_Color;	\n"
 				+ "void main() {	\n" + "	v_Color = a_Color;	\n"
-				+ "	glPosition = u_MVPMatrix * a_Position;	\n" + "}	\n";
+				+ "	gl_Position = u_MVPMatrix * a_Position;	\n" + "}	\n";
 
 		final String fragmentShader = "precision mediump float;	\n"
 				+ "varying vec4 v_Color;	\n" + "void main() {	\n"
@@ -186,32 +226,64 @@ public class CustomRenderer implements Renderer {
 
 			// Bind fragment shader
 			GLES20.glAttachShader(programHandle, fragmentShaderHandle);
-			
+
 			// Bind attributes
 			GLES20.glBindAttribLocation(programHandle, 0, "a_Position");
 			GLES20.glBindAttribLocation(programHandle, 1, "a_Color");
-			
+
 			// Link them into a program
 			GLES20.glLinkProgram(programHandle);
-			
+
 			// Get the link status
 			final int[] linkStatus = new int[1];
-			GLES20.glGetProgramiv(programHandle, GLES20.GL_LINK_STATUS, linkStatus, 0);
-			
+			GLES20.glGetProgramiv(programHandle, GLES20.GL_LINK_STATUS,
+					linkStatus, 0);
+
 			// If linking failed, delete the program
-			if(linkStatus[0] == 0) {
-				Log.e("CustomRenderer", GLES20.glGetProgramInfoLog(programHandle));
+			if (linkStatus[0] == 0) {
+				Log.e("CustomRenderer",
+						GLES20.glGetProgramInfoLog(programHandle));
 				GLES20.glDeleteProgram(programHandle);
 				programHandle = 0;
 			}
-			
+
 			if (programHandle == 0)
 				throw new RuntimeException("Error creating program");
 		}
-		
-		mMVPMatrixHandle = GLES20.glGetUniformLocation(programHandle, "u_MVPMatrix");
-		mPositionHandle = GLES20.glGetAttribLocation(programHandle, "a_Position");
+
+		// References used to pass data into the program
+		mMVPMatrixHandle = GLES20.glGetUniformLocation(programHandle,
+				"u_MVPMatrix");
+		mPositionHandle = GLES20.glGetAttribLocation(programHandle,
+				"a_Position");
 		mColorHandle = GLES20.glGetAttribLocation(programHandle, "a_Color");
+
+		// Tell OpenGL to use this program is rendering
+		GLES20.glUseProgram(programHandle);
 	}
 
+	/**
+	 * Draws a triangle from the given vertex data
+	 * 
+	 * @param aTriangleBuffer
+	 *            The buffer containing vertex data
+	 */
+	private void drawTriangle(final FloatBuffer aTriangleBuffer) {
+		// TODO Auto-generated method stub
+		aTriangleBuffer.position(mPositionOffset);
+		GLES20.glVertexAttribPointer(mPositionHandle, mPositionDataSize,
+				GLES20.GL_FLOAT, false, mStrideBytes, aTriangleBuffer);
+		GLES20.glEnableVertexAttribArray(mPositionHandle);
+
+		aTriangleBuffer.position(mColorOffset);
+		GLES20.glVertexAttribPointer(mColorHandle, mColorDataSize,
+				GLES20.GL_FLOAT, false, mStrideBytes, aTriangleBuffer);
+		GLES20.glEnableVertexAttribArray(mColorHandle);
+		
+		Matrix.multiplyMM(mMVPMatrix, 0, mViewMatrix, 0, mModelMatrix, 0);
+		Matrix.multiplyMM(mMVPMatrix, 0, mProjectionMatrix, 0, mMVPMatrix, 0);
+		
+		GLES20.glUniformMatrix4fv(mMVPMatrixHandle, 1, false, mMVPMatrix, 0);
+		GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 3);
+	}
 }
