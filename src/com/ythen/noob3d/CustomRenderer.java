@@ -15,79 +15,214 @@ import android.util.Log;
 
 public class CustomRenderer implements Renderer {
 
+	private final String tag = "CustomRenderer";
+
 	private float[] mModelMatrix = new float[16];
 	private float[] mViewMatrix = new float[16];
 	private float[] mProjectionMatrix = new float[16];
 	private float[] mMVPMatrix = new float[16];
+	private float[] mLightModelMatrix = new float[16];
 
 	private int mMVPMatrixHandle;
+	private int mMVMatrixHandle;
 	private int mPositionHandle;
 	private int mColorHandle;
+	private int mLightPositionHandle;
+	private int mNormalHandle;
 
 	private int mBytesPerFloat = 4;
 
 	// Number of bytes per vertex (7 elements per vertex)
 	private final int mStrideBytes = 7 * mBytesPerFloat;
 
-	private final int mPositionOffset = 0;
 	private final int mPositionDataSize = 3;
-	private final int mColorOffset = 3;
 	private final int mColorDataSize = 4;
+	private final int mNormalDataSize = 4;
 
-	private final FloatBuffer mTriangle1Vertices;
-	private final FloatBuffer mTriangle2Vertices;
-	private final FloatBuffer mTriangle3Vertices;
+	private final FloatBuffer mCubePositions;
+	private final FloatBuffer mCubeColors;
+	private final FloatBuffer mCubeNormals;
+
+	// Light position in model space, 4th coordinate is for translation
+	// purposes, all matrix in GLES is 4x4
+	private final float[] mLightPositionInModelSpace = new float[] { 0.0f,
+			0.0f, 0.0f, 1.0f };
+
+	// Used to store the current light position (after transformation via model
+	// matrix)
+	private final float[] mLightPositionInWorldSpace = new float[4];
+
+	// Used to store the transformed light position in eye space (after
+	// transformation via model view matrix
+	private final float[] mLightPositionInEyeSpace = new float[4];
+
+	// Handle to our per vertex cube shading program
+	private int mPerVertexProgramHandle;
+
+	// Handle to light point program
+	private int mPointProgramHandle;
 
 	public CustomRenderer() {
 		// TODO Auto-generated constructor stub
 
-		// Define points for triangles.
+		// Define points for a cube.
 
-		// This triangle is red, green, and blue.
-		final float[] triangle1VerticesData = {
-				// X, Y, Z,
-				// R, G, B, A
-				-0.5f, -0.25f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+		// X, Y, Z
+		final float[] cubePositionData = {
+				// In OpenGL counter-clockwise winding is default. This means
+				// that when we look at a triangle,
+				// if the points are counter-clockwise we are looking at the
+				// "front". If not we are looking at
+				// the back. OpenGL has an optimization where all back-facing
+				// triangles are culled, since they
+				// usually represent the backside of an object and aren't
+				// visible anyways.
 
-				0.5f, -0.25f, 0.0f, 0.0f, 0.0f, 1.0f, 1.0f,
+				// Front face
+				-1.0f, 1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f,
+				-1.0f, 1.0f, 1.0f, -1.0f,
+				1.0f,
+				1.0f,
+				1.0f,
+				1.0f,
 
-				0.0f, 0.559016994f, 0.0f, 0.0f, 1.0f, 0.0f, 1.0f };
+				// Right face
+				1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f,
+				-1.0f, 1.0f, 1.0f, -1.0f, -1.0f,
+				1.0f,
+				1.0f,
+				-1.0f,
 
-		// This triangle is yellow, cyan, and magenta.
-		final float[] triangle2VerticesData = {
-				// X, Y, Z,
-				// R, G, B, A
-				-0.5f, -0.25f, 0.0f, 1.0f, 1.0f, 0.0f, 1.0f,
+				// Back face
+				1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f,
+				1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f,
+				1.0f,
+				-1.0f,
 
-				0.5f, -0.25f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f,
+				// Left face
+				-1.0f, 1.0f, -1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, 1.0f,
+				-1.0f, -1.0f, -1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f,
+				1.0f,
 
-				0.0f, 0.559016994f, 0.0f, 1.0f, 0.0f, 1.0f, 1.0f };
+				// Top face
+				-1.0f, 1.0f, -1.0f, -1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f,
+				-1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f,
 
-		// This triangle is white, gray, and black.
-		final float[] triangle3VerticesData = {
-				// X, Y, Z,
-				// R, G, B, A
-				-0.5f, -0.25f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+				// Bottom face
+				1.0f, -1.0f, -1.0f, 1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f,
+				1.0f, -1.0f, 1.0f, -1.0f, -1.0f, 1.0f, -1.0f, -1.0f, -1.0f };
 
-				0.5f, -0.25f, 0.0f, 0.5f, 0.5f, 0.5f, 1.0f,
+		// R, G, B, A
+		final float[] cubeColorData = {
+				// Front face (red)
+				1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f,
+				0.0f, 1.0f, 1.0f, 0.0f,
+				0.0f,
+				1.0f,
+				1.0f,
+				0.0f,
+				0.0f,
+				1.0f,
+				1.0f,
+				0.0f,
+				0.0f,
+				1.0f,
 
-				0.0f, 0.559016994f, 0.0f, 0.0f, 0.0f, 0.0f, 1.0f };
+				// Right face (green)
+				0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f,
+				0.0f, 1.0f, 0.0f, 1.0f, 0.0f, 1.0f,
+				0.0f,
+				1.0f,
+				0.0f,
+				1.0f,
+				0.0f,
+				1.0f,
+				0.0f,
+				1.0f,
+
+				// Back face (blue)
+				0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f,
+				1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f,
+				1.0f,
+				1.0f,
+				0.0f,
+				0.0f,
+				1.0f,
+				1.0f,
+
+				// Left face (yellow)
+				1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f,
+				0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f,
+				1.0f,
+				1.0f,
+				0.0f,
+				1.0f,
+
+				// Top face (cyan)
+				0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f,
+				1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f,
+				0.0f, 1.0f, 1.0f,
+				1.0f,
+
+				// Bottom face (magenta)
+				1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f,
+				1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 0.0f, 1.0f, 1.0f,
+				1.0f, 0.0f, 1.0f, 1.0f };
+
+		// X, Y, Z
+		// The normal is used in light calculations and is a vector which points
+		// orthogonal to the plane of the surface. For a cube model, the normals
+		// should be orthogonal to the points of each face.
+		final float[] cubeNormalData = {
+				// Front face
+				0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+				0.0f, 1.0f, 0.0f, 0.0f,
+				1.0f,
+				0.0f,
+				0.0f,
+				1.0f,
+
+				// Right face
+				1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f,
+				0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+				1.0f,
+				0.0f,
+				0.0f,
+
+				// Back face
+				0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f,
+				0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f,
+				0.0f,
+				-1.0f,
+
+				// Left face
+				-1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f,
+				0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f,
+				0.0f,
+
+				// Top face
+				0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f,
+				1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f, 1.0f, 0.0f,
+
+				// Bottom face
+				0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f,
+				-1.0f, 0.0f, 0.0f, -1.0f, 0.0f, 0.0f, -1.0f, 0.0f };
 
 		// Allocate the size of the float buffers for triangles' vertices info
-		mTriangle1Vertices = ByteBuffer
-				.allocateDirect(triangle1VerticesData.length * mBytesPerFloat)
+		mCubePositions = ByteBuffer
+				.allocateDirect(cubePositionData.length * mBytesPerFloat)
 				.order(ByteOrder.nativeOrder()).asFloatBuffer();
-		mTriangle2Vertices = ByteBuffer
-				.allocateDirect(triangle2VerticesData.length * mBytesPerFloat)
+		mCubeColors = ByteBuffer
+				.allocateDirect(cubeColorData.length * mBytesPerFloat)
 				.order(ByteOrder.nativeOrder()).asFloatBuffer();
-		mTriangle3Vertices = ByteBuffer
-				.allocateDirect(triangle3VerticesData.length * mBytesPerFloat)
+		mCubeNormals= ByteBuffer
+				.allocateDirect(cubeNormalData.length * mBytesPerFloat)
 				.order(ByteOrder.nativeOrder()).asFloatBuffer();
 
 		// Put vertices data into float buffers
-		mTriangle1Vertices.put(triangle1VerticesData).position(0);
-		mTriangle2Vertices.put(triangle2VerticesData).position(0);
-		mTriangle3Vertices.put(triangle3VerticesData).position(0);
+		mCubePositions.put(cubePositionData).position(0);
+		mCubeColors.put(cubeColorData).position(0);
+		mCubeNormals.put(cubeNormalData).position(0);
 	}
 
 	public void onDrawFrame(GL10 arg0) {
@@ -100,12 +235,12 @@ public class CustomRenderer implements Renderer {
 		Matrix.setIdentityM(mModelMatrix, 0);
 		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 0, 0, 1.0f);
 		drawTriangle(mTriangle1Vertices);
-		
+
 		Matrix.setIdentityM(mModelMatrix, 0);
 		Matrix.translateM(mModelMatrix, 0, 0, -1.0f, 0);
 		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 0, 1, 0);
 		drawTriangle(mTriangle2Vertices);
-		
+
 		Matrix.setIdentityM(mModelMatrix, 0);
 		Matrix.translateM(mModelMatrix, 0, 0, 1.0f, 0);
 		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 1, 0, 0);
@@ -279,10 +414,10 @@ public class CustomRenderer implements Renderer {
 		GLES20.glVertexAttribPointer(mColorHandle, mColorDataSize,
 				GLES20.GL_FLOAT, false, mStrideBytes, aTriangleBuffer);
 		GLES20.glEnableVertexAttribArray(mColorHandle);
-		
+
 		Matrix.multiplyMM(mMVPMatrix, 0, mViewMatrix, 0, mModelMatrix, 0);
 		Matrix.multiplyMM(mMVPMatrix, 0, mProjectionMatrix, 0, mMVPMatrix, 0);
-		
+
 		GLES20.glUniformMatrix4fv(mMVPMatrixHandle, 1, false, mMVPMatrix, 0);
 		GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 3);
 	}
