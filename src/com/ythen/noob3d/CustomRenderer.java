@@ -32,9 +32,6 @@ public class CustomRenderer implements Renderer {
 
 	private int mBytesPerFloat = 4;
 
-	// Number of bytes per vertex (7 elements per vertex)
-	private final int mStrideBytes = 7 * mBytesPerFloat;
-
 	private final int mPositionDataSize = 3;
 	private final int mColorDataSize = 4;
 	private final int mNormalDataSize = 4;
@@ -215,7 +212,7 @@ public class CustomRenderer implements Renderer {
 		mCubeColors = ByteBuffer
 				.allocateDirect(cubeColorData.length * mBytesPerFloat)
 				.order(ByteOrder.nativeOrder()).asFloatBuffer();
-		mCubeNormals= ByteBuffer
+		mCubeNormals = ByteBuffer
 				.allocateDirect(cubeNormalData.length * mBytesPerFloat)
 				.order(ByteOrder.nativeOrder()).asFloatBuffer();
 
@@ -225,6 +222,84 @@ public class CustomRenderer implements Renderer {
 		mCubeNormals.put(cubeNormalData).position(0);
 	}
 
+	protected String getVertexShader() {
+		final String vertexShader = "uniform mat4 u_MVPMatrix;"
+				+ "uniform mat4 u_MVMatrix;"
+				+ "uniform vec3 u_LightPos;"
+				+ "attribute vec4 a_Position;"
+				+ "attribute vec4 a_Color;"
+				+ "attribute vec3 a_Normal;"
+				+ "varying vec4 v_Color;"
+				+ "void main() {"
+				+
+				// Vertex position in eye space
+				"	vec3 modelViewVertex = vec3(u_MVMatrix * a_Position);"
+				+
+				// Surface normal in eye space
+				"	vec3 modelViewNormal = vec3(u_MVMatrix * a_Normal);"
+				+
+				// Distance between light source and vertex
+				"	float distance = length(u_LightPos - modelViewVertex);"
+				+
+				// Unit vector from light source to vertex
+				"	vec3 lightVector = normalize(u_LightPos - modelViewVertex);"
+				+
+				// Diffuse coefficient from dot product
+				"	float diffuse = max(dot(modelViewNormal, lightVector), 0.1);"
+				+
+				// Attenuation (damped)
+				"	diffuse = diffuse * (1.0 / (1.0 + (0.25 * distance * distance)));"
+				+ "	v_Color = a_Color * diffuse;"
+				+ "	gl_Position = u_MVMatrix * a_Position;" + "}";
+		return vertexShader;
+	}
+
+	protected String getFragmentShader() {
+		final String fragmentShader = "precision mediump float;"
+				+ "varying vec4 v_Color;" + "void main(){"
+				+ "	gl_FragColor = v_Color;" + "}";
+		return fragmentShader;
+	}
+
+	/**
+	 * Helper function to compile a shader
+	 * 
+	 * @param shaderType
+	 *            The shader type
+	 * @param shaderSource
+	 *            The shader source code
+	 * @return An OpenGL handle to the shader
+	 */
+	private int compileShader(final int shaderType, final String shaderSource) {
+		// Loading vertex shader into OpenGLES2.0
+		int shaderHandle = GLES20.glCreateShader(shaderType);
+
+		if (shaderHandle != 0) {
+			// Set shader source then compile it
+			GLES20.glShaderSource(shaderHandle, shaderSource);
+			GLES20.glCompileShader(shaderHandle);
+
+			// Get compilation status
+			final int[] compileStatus = new int[1];
+			GLES20.glGetShaderiv(shaderHandle, GLES20.GL_COMPILE_STATUS,
+					compileStatus, 0);
+
+			// If failed to compile, delete the shader
+			if (compileStatus[0] == 0) {
+				Log.e(tag,
+						"Error compiling shader: "
+								+ GLES20.glGetShaderInfoLog(shaderHandle));
+				GLES20.glDeleteShader(shaderHandle);
+				shaderHandle = 0;
+			}
+		}
+
+		if (shaderHandle == 0)
+			throw new RuntimeException("Error creating vertex shader");
+
+		return shaderHandle;
+	}
+
 	public void onDrawFrame(GL10 arg0) {
 		// TODO Auto-generated method stub
 		GLES20.glClear(GLES20.GL_DEPTH_BUFFER_BIT | GLES20.GL_COLOR_BUFFER_BIT);
@@ -232,19 +307,65 @@ public class CustomRenderer implements Renderer {
 		// Do a complete rotation every 10 seconds
 		long time = SystemClock.uptimeMillis() % 10000L;
 		float angleInDegrees = (360.0f / 10000.0f) * (int) time;
-		Matrix.setIdentityM(mModelMatrix, 0);
-		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 0, 0, 1.0f);
-		drawTriangle(mTriangle1Vertices);
 
-		Matrix.setIdentityM(mModelMatrix, 0);
-		Matrix.translateM(mModelMatrix, 0, 0, -1.0f, 0);
-		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 0, 1, 0);
-		drawTriangle(mTriangle2Vertices);
+		GLES20.glUseProgram(mPerVertexProgramHandle);
 
+		// Set program handles for cube drawing
+		mMVPMatrixHandle = GLES20.glGetUniformLocation(mPerVertexProgramHandle,
+				"u_MVPMatrix");
+		mMVMatrixHandle = GLES20.glGetUniformLocation(mPerVertexProgramHandle,
+				"u_MVMatrix");
+		mLightPositionHandle = GLES20.glGetUniformLocation(
+				mPerVertexProgramHandle, "u_LightPos");
+		mPositionHandle = GLES20.glGetAttribLocation(mPerVertexProgramHandle,
+				"a_Position");
+		mColorHandle = GLES20.glGetAttribLocation(mPerVertexProgramHandle,
+				"a_Color");
+		mNormalHandle = GLES20.glGetAttribLocation(mPerVertexProgramHandle,
+				"a_Normal");
+
+		// Calculate position of the light source, rotate and then push into
+		// distance
+		Matrix.setIdentityM(mLightModelMatrix, 0);
+		Matrix.translateM(mLightModelMatrix, 0, 0, 0, -5);
+		Matrix.rotateM(mLightModelMatrix, 0, angleInDegrees, 0, 1, 0);
+		Matrix.translateM(mLightModelMatrix, 0, 0, 0, 2);
+
+		// Initially, light is at its own model space (0, 0, 0), after
+		// transformation, the light is positioned somewhere in the world
+		// depending on the model matrix
+		Matrix.multiplyMV(mLightPositionInWorldSpace, 0, mLightModelMatrix, 0,
+				mLightPositionInModelSpace, 0);
+		Matrix.multiplyMV(mLightPositionInEyeSpace, 0, mViewMatrix, 0,
+				mLightPositionInWorldSpace, 0);
+ 
+		// Draw some cubes
 		Matrix.setIdentityM(mModelMatrix, 0);
-		Matrix.translateM(mModelMatrix, 0, 0, 1.0f, 0);
+		Matrix.translateM(mModelMatrix, 0, 4, 0, -7);
 		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 1, 0, 0);
-		drawTriangle(mTriangle3Vertices);
+		drawCube();
+		
+		Matrix.setIdentityM(mModelMatrix, 0);
+		Matrix.translateM(mModelMatrix, 0, -4, 0, -7);
+		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 0, 1, 0);
+		drawCube();
+		
+		Matrix.setIdentityM(mModelMatrix, 0);
+		Matrix.translateM(mModelMatrix, 0, 0, 4, -7);
+		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 0, 0, 1);
+		drawCube();
+		
+		Matrix.setIdentityM(mModelMatrix, 0);
+		Matrix.translateM(mModelMatrix, 0, 0, -4, -7);
+		drawCube();
+		
+		Matrix.setIdentityM(mModelMatrix, 0);
+		Matrix.translateM(mModelMatrix, 0, 0, 0, -5);
+		Matrix.rotateM(mModelMatrix, 0, angleInDegrees, 1, 1, 0);
+		drawCube();
+		
+		GLES20.glUseProgram(mPointProgramHandle);
+		drawLight();
 	}
 
 	public void onSurfaceChanged(GL10 arg0, int width, int height) {
@@ -256,6 +377,8 @@ public class CustomRenderer implements Renderer {
 		// remain same while the width varies with the aspect ratio of the
 		// surface
 		// Note to ythen: This should be to handle changes on screen orientation
+		// Confirmed, it's used to reset projection when screen orientation
+		// changed
 		final float ratio = (float) width / height;
 		final float left = -ratio;
 		final float right = ratio;
@@ -270,12 +393,21 @@ public class CustomRenderer implements Renderer {
 
 	public void onSurfaceCreated(GL10 arg0, EGLConfig arg1) {
 		// TODO Auto-generated method stub
-		GLES20.glClearColor(0.5f, 0.5f, 0.5f, 0.5f);
+		// Set background color to black
+		GLES20.glClearColor(0, 0, 0, 0);
 
-		// Set eye behind origin
+		// Use culling to remove back faces, to save resources/time by not
+		// drawing unseen faces
+		GLES20.glEnable(GLES20.GL_CULL_FACE);
+
+		// Enable depth testing, spend less time drawing pixels that will be
+		// drawn over
+		GLES20.glEnable(GLES20.GL_DEPTH_TEST);
+
+		// Set eye in front of origin
 		final float eyeX = 0;
 		final float eyeY = 0;
-		final float eyeZ = 1.5f;
+		final float eyeZ = -0.5f;
 
 		// Look towards distance
 		final float lookX = 0;
@@ -291,67 +423,43 @@ public class CustomRenderer implements Renderer {
 		Matrix.setLookAtM(mViewMatrix, 0, eyeX, eyeY, eyeZ, lookX, lookY,
 				lookZ, upX, upY, upZ);
 
-		final String vertexShader = "uniform mat4 u_MVPMatrix;	\n"
-				+ "attribute vec4 a_Position;	\n"
-				+ "attribute vec4 a_Color;	\n" + "varying vec4 v_Color;	\n"
-				+ "void main() {	\n" + "	v_Color = a_Color;	\n"
-				+ "	gl_Position = u_MVPMatrix * a_Position;	\n" + "}	\n";
+		final String vertexShader = getVertexShader();
 
-		final String fragmentShader = "precision mediump float;	\n"
-				+ "varying vec4 v_Color;	\n" + "void main() {	\n"
-				+ "	gl_FragColor = v_Color;	\n" + "}	\n";
+		final String fragmentShader = getFragmentShader();
 
-		// Loading vertex shader into OpenGLES2.0
-		int vertexShaderHandle = GLES20.glCreateShader(GLES20.GL_VERTEX_SHADER);
+		// Compile vertex shader
+		final int vertexShaderHandle = compileShader(GLES20.GL_VERTEX_SHADER,
+				vertexShader);
 
-		if (vertexShaderHandle != 0) {
-			// Set shader source then compile it
-			GLES20.glShaderSource(vertexShaderHandle, vertexShader);
-			GLES20.glCompileShader(vertexShaderHandle);
+		// Compile fragment shader
+		final int fragmentShaderHandle = compileShader(
+				GLES20.GL_FRAGMENT_SHADER, fragmentShader);
 
-			// Get compilation status
-			final int[] compileStatus = new int[1];
-			GLES20.glGetShaderiv(vertexShaderHandle, GLES20.GL_COMPILE_STATUS,
-					compileStatus, 0);
+		mPerVertexProgramHandle = createAndLinkProgram(vertexShaderHandle,
+				fragmentShaderHandle, new String[] { "a_Position", "a_Color",
+						"a_Normal" });
 
-			// If failed to compile, delete the shader
-			if (compileStatus[0] == 0) {
-				Log.e("CustomRenderer",
-						GLES20.glGetShaderInfoLog(vertexShaderHandle));
-				GLES20.glDeleteShader(vertexShaderHandle);
-				vertexShaderHandle = 0;
-			}
-		}
+		// Define a simple shader program for light point source
+		final String pointVertexShader = "uniform mat4 u_MVPMatrix;"
+				+ "attribute vec4 a_Position;" + "void main() {"
+				+ "	gl_Position = u_MVPMatrix * a_Position;"
+				+ "	gl_PointSize = 5.0" + "}";
 
-		if (vertexShaderHandle == 0)
-			throw new RuntimeException("Error creating vertex shader");
+		final String pointFragmentShader = "precision mediump float;"
+				+ "void main() {" + "	gl_FragColor = vec4(1,1,1,1);" + "}";
 
-		// Loading fragment shader into OpenGLES2.0
-		int fragmentShaderHandle = GLES20
-				.glCreateShader(GLES20.GL_FRAGMENT_SHADER);
+		final int pointVertexShaderHandle = compileShader(
+				GLES20.GL_VERTEX_SHADER, pointVertexShader);
+		final int pointFragmentShaderHandle = compileShader(
+				GLES20.GL_FRAGMENT_SHADER, pointFragmentShader);
 
-		if (fragmentShaderHandle != 0) {
-			// Set shader source then compile it
-			GLES20.glShaderSource(fragmentShaderHandle, fragmentShader);
-			GLES20.glCompileShader(fragmentShaderHandle);
+		mPointProgramHandle = createAndLinkProgram(pointVertexShaderHandle,
+				pointFragmentShaderHandle, new String[] { "a_Position" });
+	}
 
-			// Get compilation status
-			final int[] compileStatus = new int[1];
-			GLES20.glGetShaderiv(fragmentShaderHandle,
-					GLES20.GL_COMPILE_STATUS, compileStatus, 0);
-
-			// If failed to compile, delete the shader
-			if (compileStatus[0] == 0) {
-				Log.e("CustomRenderer",
-						GLES20.glGetShaderInfoLog(fragmentShaderHandle));
-				GLES20.glDeleteShader(fragmentShaderHandle);
-				fragmentShaderHandle = 0;
-			}
-		}
-
-		if (fragmentShaderHandle == 0)
-			throw new RuntimeException("Error creating fragment shader");
-
+	private int createAndLinkProgram(final int vertexShaderHandle,
+			final int fragmentShaderHandle, final String[] attributes) {
+		// TODO Auto-generated method stub
 		// Link vertex and fragment shader together into a program
 		int programHandle = GLES20.glCreateProgram();
 
@@ -363,8 +471,12 @@ public class CustomRenderer implements Renderer {
 			GLES20.glAttachShader(programHandle, fragmentShaderHandle);
 
 			// Bind attributes
-			GLES20.glBindAttribLocation(programHandle, 0, "a_Position");
-			GLES20.glBindAttribLocation(programHandle, 1, "a_Color");
+			if (attributes != null) {
+				final int size = attributes.length;
+				for (int i = 0; i < size; i++) {
+					GLES20.glBindAttribLocation(programHandle, i, attributes[i]);
+				}
+			}
 
 			// Link them into a program
 			GLES20.glLinkProgram(programHandle);
@@ -376,8 +488,9 @@ public class CustomRenderer implements Renderer {
 
 			// If linking failed, delete the program
 			if (linkStatus[0] == 0) {
-				Log.e("CustomRenderer",
-						GLES20.glGetProgramInfoLog(programHandle));
+				Log.e(tag,
+						"Error compiling program: "
+								+ GLES20.glGetProgramInfoLog(programHandle));
 				GLES20.glDeleteProgram(programHandle);
 				programHandle = 0;
 			}
@@ -386,39 +499,45 @@ public class CustomRenderer implements Renderer {
 				throw new RuntimeException("Error creating program");
 		}
 
-		// References used to pass data into the program
-		mMVPMatrixHandle = GLES20.glGetUniformLocation(programHandle,
-				"u_MVPMatrix");
-		mPositionHandle = GLES20.glGetAttribLocation(programHandle,
-				"a_Position");
-		mColorHandle = GLES20.glGetAttribLocation(programHandle, "a_Color");
-
-		// Tell OpenGL to use this program is rendering
-		GLES20.glUseProgram(programHandle);
+		return programHandle;
 	}
 
-	/**
-	 * Draws a triangle from the given vertex data
-	 * 
-	 * @param aTriangleBuffer
-	 *            The buffer containing vertex data
-	 */
-	private void drawTriangle(final FloatBuffer aTriangleBuffer) {
+
+	private void drawLight() {
 		// TODO Auto-generated method stub
-		aTriangleBuffer.position(mPositionOffset);
-		GLES20.glVertexAttribPointer(mPositionHandle, mPositionDataSize,
-				GLES20.GL_FLOAT, false, mStrideBytes, aTriangleBuffer);
-		GLES20.glEnableVertexAttribArray(mPositionHandle);
-
-		aTriangleBuffer.position(mColorOffset);
-		GLES20.glVertexAttribPointer(mColorHandle, mColorDataSize,
-				GLES20.GL_FLOAT, false, mStrideBytes, aTriangleBuffer);
-		GLES20.glEnableVertexAttribArray(mColorHandle);
-
-		Matrix.multiplyMM(mMVPMatrix, 0, mViewMatrix, 0, mModelMatrix, 0);
+		final int pointMVPMatrixHandle = GLES20.glGetUniformLocation(mPointProgramHandle, "u_MVPMatrix");
+		final int pointPositionHandle = GLES20.glGetAttribLocation(mPointProgramHandle, "a_Position");
+		
+		GLES20.glVertexAttrib3f(pointPositionHandle, mLightPositionInModelSpace[0], mLightPositionInModelSpace[1], mLightPositionInModelSpace[2]);
+		GLES20.glDisableVertexAttribArray(pointPositionHandle);
+		
+		Matrix.multiplyMM(mMVPMatrix, 0, mViewMatrix, 0, mLightModelMatrix, 0);
 		Matrix.multiplyMM(mMVPMatrix, 0, mProjectionMatrix, 0, mMVPMatrix, 0);
+		GLES20.glUniformMatrix4fv(pointMVPMatrixHandle, 1, false, mMVPMatrix, 0);
+	}
 
+	private void drawCube() {
+		// TODO Auto-generated method stub
+		mCubePositions.position(0);
+		GLES20.glVertexAttribPointer(mPositionHandle, mPositionDataSize, GLES20.GL_FLOAT, false, 0, mCubePositions);
+		GLES20.glEnableVertexAttribArray(mPositionHandle);
+		
+		mCubeColors.position(0);
+		GLES20.glVertexAttribPointer(mColorHandle, mColorDataSize, GLES20.GL_FLOAT, false, 0, mCubeColors);
+		GLES20.glEnableVertexAttribArray(mColorHandle);
+		
+		mCubeNormals.position(0);
+		GLES20.glVertexAttribPointer(mNormalHandle, mNormalDataSize, GLES20.GL_FLOAT, false, 0, mCubeNormals);
+		GLES20.glEnableVertexAttribArray(mNormalHandle);
+		
+		Matrix.multiplyMM(mMVPMatrix, 0, mViewMatrix, 0, mModelMatrix, 0);
+		GLES20.glUniformMatrix4fv(mMVMatrixHandle, 1, false, mMVPMatrix, 0);
+		
+		Matrix.multiplyMM(mMVPMatrix, 0, mProjectionMatrix, 0, mMVPMatrix, 0);
 		GLES20.glUniformMatrix4fv(mMVPMatrixHandle, 1, false, mMVPMatrix, 0);
-		GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 3);
+		
+		GLES20.glUniform3f(mLightPositionHandle, mLightPositionInEyeSpace[0], mLightPositionInEyeSpace[1], mLightPositionInEyeSpace[2]);
+		
+		GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 36);
 	}
 }
