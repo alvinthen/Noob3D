@@ -225,39 +225,29 @@ public class CustomRenderer implements Renderer {
 	protected String getVertexShader() {
 		final String vertexShader = "uniform mat4 u_MVPMatrix;	\n"
 				+ "uniform mat4 u_MVMatrix;	\n"
-				+ "uniform vec3 u_LightPos;	\n"
 				+ "attribute vec4 a_Position;	\n"
-				+ "attribute vec4 a_Color;	\n"
-				+ "attribute vec3 a_Normal;	\n"
-				+ "varying vec4 v_Color;	\n"
-				+ "void main() {	\n"
-				+
-				// Vertex position in eye space
-				"	vec3 modelViewVertex = vec3(u_MVMatrix * a_Position);	\n"
-				+
-				// Surface normal in eye space
-				"	vec3 modelViewNormal = vec3(u_MVMatrix * vec4(a_Normal, 0));	\n"
-				+
-				// Distance between light source and vertex
-				"	float distance = length(u_LightPos - modelViewVertex);	\n"
-				+
-				// Unit vector from light source to vertex
-				"	vec3 lightVector = normalize(u_LightPos - modelViewVertex);	\n"
-				+
-				// Diffuse coefficient from dot product
-				"	float diffuse = max(dot(modelViewNormal, lightVector), 0.5);	\n"
-				+
-				// Attenuation (damped)
-				"	diffuse = diffuse * (1.0 / (1.0 + (0.25 * distance * distance)));	\n"
-				+ "	v_Color = a_Color * diffuse;	\n"
+				+ "attribute vec4 a_Color;	\n" + "attribute vec3 a_Normal;	\n"
+				+ "varying vec4 v_Color;	\n" + "varying vec3 v_Position;	\n"
+				+ "varying vec3 v_Normal;	\n" + "void main() {	\n"
+				+ "	v_Color = a_Color;	\n"
+				+ "	v_Position = vec3(u_MVMatrix * a_Position);	\n"
+				+ "	v_Normal = vec3(u_MVMatrix * vec4(a_Normal, 0.0));	\n"
 				+ "	gl_Position = u_MVPMatrix * a_Position;	\n" + "}	\n";
 		return vertexShader;
 	}
 
 	protected String getFragmentShader() {
 		final String fragmentShader = "precision mediump float;	\n"
-				+ "varying vec4 v_Color;	\n" + "void main() {	\n"
-				+ "	gl_FragColor = v_Color;	\n" + "}	\n";
+				+ "uniform vec3 u_LightPos;	\n"
+				+ "varying vec4 v_Color;	\n"
+				+ "varying vec3 v_Position;	\n"
+				+ "varying vec3 v_Normal;	\n"
+				+ "void main() {	\n"
+				+ "	float distance = length(u_LightPos - v_Position);	\n"
+				+ "	vec3 lightVector = normalize(u_LightPos - v_Position);	\n"
+				+ "	float diffuse = max(dot(v_Normal, lightVector), 0.5);	\n"
+				+ "	diffuse = diffuse * (1.0 / (1.0 + (0.25 * distance * distance)));	\n"
+				+ "	gl_FragColor = v_Color * diffuse;	\n" + "}	\n";
 		return fragmentShader;
 	}
 
@@ -431,17 +421,17 @@ public class CustomRenderer implements Renderer {
 	private int compileShader(final int shaderType, final String shaderSource) {
 		// Loading vertex shader into OpenGLES2.0
 		int shaderHandle = GLES20.glCreateShader(shaderType);
-	
+
 		if (shaderHandle != 0) {
 			// Set shader source then compile it
 			GLES20.glShaderSource(shaderHandle, shaderSource);
 			GLES20.glCompileShader(shaderHandle);
-	
+
 			// Get compilation status
 			final int[] compileStatus = new int[1];
 			GLES20.glGetShaderiv(shaderHandle, GLES20.GL_COMPILE_STATUS,
 					compileStatus, 0);
-	
+
 			// If failed to compile, delete the shader
 			if (compileStatus[0] == 0) {
 				Log.e(tag,
@@ -451,10 +441,10 @@ public class CustomRenderer implements Renderer {
 				shaderHandle = 0;
 			}
 		}
-	
+
 		if (shaderHandle == 0)
 			throw new RuntimeException("Error creating shader");
-	
+
 		return shaderHandle;
 	}
 
@@ -518,7 +508,7 @@ public class CustomRenderer implements Renderer {
 		Matrix.multiplyMM(mMVPMatrix, 0, mViewMatrix, 0, mLightModelMatrix, 0);
 		Matrix.multiplyMM(mMVPMatrix, 0, mProjectionMatrix, 0, mMVPMatrix, 0);
 		GLES20.glUniformMatrix4fv(pointMVPMatrixHandle, 1, false, mMVPMatrix, 0);
-		
+
 		// DRAW THE POINT HERE
 		GLES20.glDrawArrays(GLES20.GL_POINTS, 0, 1);
 	}
